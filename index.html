@@ -16,7 +16,6 @@
             color: white;
             text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
         }
-
     </style>
 </head>
 <body>
@@ -24,6 +23,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.1/howler.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script>
         let camera, scene, renderer, controls;
         let objects = [];
@@ -62,8 +62,17 @@
             src: ['goldpump.mp3']
         });
 
+        const hitPump = new Howl({
+            src: ['hitpump.mp3']
+        });
+
+        let currentWeapon = 1;
+
         let countdown = 60;
         let countdownInterval;
+
+        let world; // Cannon.js world
+        let playerBody; // Cannon.js body for the player
 
         init();
         animate();
@@ -122,6 +131,8 @@
             document.addEventListener('keydown', onKeyDown);
             document.addEventListener('keyup', onKeyUp);
 
+            document.addEventListener('wheel', onWheel);
+
             raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0), 0, 10);
 
             const floorGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
@@ -132,6 +143,25 @@
             const floor = new THREE.Mesh(floorGeometry, floorMaterial);
             scene.add(floor);
             objects.push(floor);
+
+            // Initialize Cannon.js physics world
+            world = new CANNON.World();
+            world.gravity.set(0, -9.82, 0);
+            world.broadphase = new CANNON.NaiveBroadphase();
+            world.solver.iterations = 10;
+
+            const floorShape = new CANNON.Plane();
+            const floorBody = new CANNON.Body({ mass: 0 });
+            floorBody.addShape(floorShape);
+            floorBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+            world.addBody(floorBody);
+
+            // Create player physics body
+            const playerShape = new CANNON.Sphere(1.5);
+            playerBody = new CANNON.Body({ mass: 80 });
+            playerBody.addShape(playerShape);
+            playerBody.position.set(camera.position.x, camera.position.y, camera.position.z);
+            world.addBody(playerBody);
 
             // Add trees
             for (let i = 0; i < 20; i++) {
@@ -170,6 +200,14 @@
 
                 scene.add(building);
                 objects.push(building);
+
+                // Create corresponding physics body
+                const shape = new CANNON.Box(new CANNON.Vec3(10, 25, 10));
+                const body = new CANNON.Body({ mass: 1000 });
+                body.addShape(shape);
+                body.position.copy(building.position);
+                world.addBody(body);
+                building.body = body;
             }
 
             // Add player's gun
@@ -178,6 +216,14 @@
             const gun = new THREE.Mesh(gunGeometry, gunMaterial);
             gun.position.set(1, -1, -2);
             camera.add(gun);
+
+            // Add pump gun
+            const pumpTexture = new THREE.TextureLoader().load('pump.png');
+            const pumpMaterial = new THREE.MeshBasicMaterial({ map: pumpTexture });
+            const pumpGun = new THREE.Mesh(gunGeometry, pumpMaterial);
+            pumpGun.position.set(1, -1, -2);
+            pumpGun.visible = false; // Initially hidden
+            camera.add(pumpGun);
 
             renderer = new THREE.WebGLRenderer();
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -191,51 +237,50 @@
 
             window.addEventListener('resize', onWindowResize);
 
-            countdownInterval = setInterval(updateCountdown, 100);
+            countdownInterval = setInterval(updateCountdown, 1000);
         }
 
-
-
         function updateCountdown() {
-                countdown--;
-                document.getElementById('countdown').textContent = countdown;
+            countdown--;
+            document.getElementById('countdown').textContent = countdown;
             if (countdown === 0) {
-                    clearInterval(countdownInterval);
-                    endSound.play();
-                    elPrimoSong.play();
-                    goldPump.play();
-                    flashSkyMultipleTimes();
+                clearInterval(countdownInterval);
+                endSound.play();
+                elPrimoSong.play();
+                goldPump.play();
+                flashSkyMultipleTimes();
             }
         }
 
         function flashSkyMultipleTimes() {
-                let flashCount = 0;
-                const flashInterval = setInterval(() => {
-            if (flashCount >= 10) {
-                clearInterval(flashInterval);
-                scene.background.set(0x87CEEB); // Reset to sky blue
-                return;
+            let flashCount = 0;
+            const flashInterval = setInterval(() => {
+                if (flashCount >= 10) {
+                    clearInterval(flashInterval);
+                    scene.background.set(0x87CEEB); // Sky blue
+                    return;
                 }
-                scene.background.set(0xffffff); // Flash white
+                scene.background.set(0xffffff); // White
                 setTimeout(() => {
-                scene.background.set(0x87CEEB); // Reset to sky blue
-            }, 100);
-            flashCount++;
-        }, 200);
+                    scene.background.set(0x87CEEB); // Sky blue
+                }, 100);
+                flashCount++;
+            }, 200);
         }
 
+        function onWheel(event) {
+            currentWeapon = (currentWeapon % 2) + 1;
 
-
+            // Toggle gun visibility based on the current weapon
+            camera.children[0].visible = (currentWeapon === 1); // Normal gun
+            camera.children[1].visible = (currentWeapon === 2); // Pump gun
+        }
 
         function onMouseDown(event) {
-            if (event.button === 0) {
-                shoot();
-            }
-        }
+            event.preventDefault();
 
-        function shoot() {
-            const projectileGeometry = new THREE.SphereGeometry(0.1, 8, 8);
             const projectileMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red
+            const projectileGeometry = new THREE.SphereGeometry(0.2, 8, 8);
             const projectile = new THREE.Mesh(projectileGeometry, projectileMaterial);
 
             const position = controls.getObject().position.clone();
@@ -243,12 +288,18 @@
             camera.getWorldDirection(direction);
 
             projectile.position.copy(position);
-            projectile.velocity = direction.clone().multiplyScalar(10);
+            projectile.velocity = direction.clone().multiplyScalar(100);
+
+            projectile.weapon = currentWeapon; // Store the weapon type
 
             scene.add(projectile);
             projectiles.push(projectile);
 
-            shotSound.play();
+            if (currentWeapon === 1) {
+                shotSound.play();
+            } else {
+                goldPump.play();
+            }
         }
 
         function onWindowResize() {
@@ -289,28 +340,55 @@
             updateExplosions(delta);
             updateParticles(delta);
 
+            world.step(delta);
+
+            // Update player position in physics world
+            playerBody.position.copy(controls.getObject().position);
+            playerBody.quaternion.copy(controls.getObject().quaternion);
+
+            // Update the position of the buildings
+            for (let i = 0; i < objects.length; i++) {
+                if (objects[i].body) {
+                    objects[i].position.copy(objects[i].body.position);
+                    objects[i].quaternion.copy(objects[i].body.quaternion);
+                }
+            }
+
             prevTime = time;
 
             renderer.render(scene, camera);
         }
 
         function updateProjectiles(delta) {
-            for (let i = 0; i < projectiles.length; i++) {
-                const projectile = projectiles[i];
-                projectile.position.add(projectile.velocity.clone().multiplyScalar(delta));
+    for (let i = 0; i < projectiles.length; i++) {
+        const projectile = projectiles[i];
+        const previousPosition = projectile.position.clone();
+        projectile.position.add(projectile.velocity.clone().multiplyScalar(delta));
 
-                const ray = new THREE.Raycaster(projectile.position.clone(), projectile.velocity.clone().normalize(), 0, 0.1);
-                const collisions = ray.intersectObjects(objects, true);
-                if (collisions.length > 0) {
-                    createExplosion(projectile.position);
-                    scene.remove(projectile);
-                    projectiles.splice(i, 1);
-                    i--;
+        // Create a ray from the previous position to the current position
+        const direction = projectile.velocity.clone().normalize();
+        const distance = projectile.velocity.length() * delta;
+        const ray = new THREE.Raycaster(previousPosition, direction, 0, distance);
+
+        const collisions = ray.intersectObjects(objects, true);
+        if (collisions.length > 0) {
+            const hitObject = collisions[0].object;
+            createExplosion(projectile.position, hitObject, projectile.weapon);
+            scene.remove(projectile);
+            projectiles.splice(i, 1);
+            i--;
+
+            // Apply force to the hit building
+            if (hitObject.body) {
+                const force = projectile.velocity.clone().multiplyScalar(5000);
+                hitObject.body.applyImpulse(new CANNON.Vec3(force.x, force.y, force.z), new CANNON.Vec3(hitObject.body.position.x, hitObject.body.position.y, hitObject.body.position.z));
                 }
             }
         }
+    }
 
-        function createExplosion(position) {
+
+        function createExplosion(position, hitObject, weaponType) {
             const explosionGeometry = new THREE.SphereGeometry(4, 32, 32);
             const explosionMaterial = new THREE.MeshBasicMaterial({ color: 0xffa500 }); // Orange
             const explosion = new THREE.Mesh(explosionGeometry, explosionMaterial);
@@ -319,7 +397,11 @@
             scene.add(explosion);
             explosions.push(explosion);
 
-            explosionSound.play();
+            if (weaponType === 2) {
+                hitPump.play(); // Play hit pump sound
+            } else {
+                explosionSound.play(); // Play normal explosion sound
+            }
 
             setTimeout(() => {
                 scene.remove(explosion);
@@ -344,6 +426,16 @@
 
                 scene.add(particle);
                 particles.push(particle);
+            }
+
+            // Apply explosion force to hit object
+            if (hitObject.body) {
+                const force = new CANNON.Vec3(
+                    (Math.random() - 0.5) * 1000,
+                    (Math.random() - 0.5) * 1000,
+                    (Math.random() - 0.5) * 1000
+                );
+                hitObject.body.applyImpulse(force, hitObject.body.position);
             }
         }
 
